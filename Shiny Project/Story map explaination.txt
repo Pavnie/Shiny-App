@@ -1,0 +1,5 @@
+I added a story map.
+
+I used the same data as my shiny R project. It is the sum of victimisation from 2014 to 2020. 
+I did a table join with kx-nz-police-district-boundaries-SHP (from koodinates)
+and the csv file "story_map.csv"
