@@ -1,3 +1,1 @@
-Project
-
-Shiny App : https://pawaneet.shinyapps.io/crime/ 
+Project Shiny App : https://pawaneet.shinyapps.io/crime/ 
