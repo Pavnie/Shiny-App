@@ -1,3 +1,5 @@
+
+# Load necessary libraries
 library(shiny)
 library(dplyr)
 library(ggplot2)
@@ -7,210 +9,147 @@ library(plotly)
 library(shinythemes)
 library(tmap)
 library(sf)
-
 library(shinyjs)
+library(feather)
+library(units)
+library(RColorBrewer)
 
-shinyjs <- "shinyjs.closeWindow = function() { window.close(); }"
+# JavaScript code for closing the Shiny app window
+shinyjs_code <- "shinyjs.closeWindow = function() { window.close(); }"
 
-# Excel 
+# Load the datasets
+police <- readRDS('police.rds')
+pd <- readRDS('vict.rds')
 
-p=read.csv('police.csv')
-pd=read.csv('vict.csv')
+# Load the updated shapefile and remove unnecessary columns
+nz_police_district <- st_read("nz-police-district-boundaries-updated.shp", stringsAsFactors = FALSE) %>%
+  rename(`Regional Council` = DISTRICT_N) %>%
+  mutate(area = st_area(geometry) %>% set_units(km^2) %>% as.numeric())
 
-#shapefile
+# Assign colors to regions
+region_colors <- RColorBrewer::brewer.pal(n = length(unique(nz_police_district$`Regional Council`)), name = "Set3")
+names(region_colors) <- unique(nz_police_district$`Regional Council`)
 
-nz_police_district=st_read("nz-police-district-boundaries.shp",stringsAsFactors = FALSE)
-
-levels(factor(pd$ANZSOC.Subdivision))
-names(pd)
-
-# Title 
-name <- list(
-  title = "Crime In New Zealand")
-
-# setting  and cleaning the data 
-f <- file.path('C:','Users','User','Desktop','shiny_r_final','vict.csv')
+# Clean the pd data
+f <- file.path('C:', 'Users', 'Pawaneet Kaur', 'R', 'Desktop', 'Crime Shiny Project', 'vict.rds')
 if (file.exists(f)) {
-  pd <- read.csv(f, stringsAsFactors = FALSE)
-  pd<-pd[!(pd$Age=="Not Applicable" | 
-             pd$Age=="Not Specified"),]  }
+  pd <- readRDS(f) %>% filter(!Age %in% c("Not Applicable", "Not Specified"))
+}
 
-application <- list(
+# Define the UI
+ui <- fluidPage(
+  theme = shinytheme("cyborg"),
+  themeSelector(),
+  tags$head(tags$style(HTML("
+    .dataTables_length label, 
+    .dataTables_filter label,
+    .dataTables_info {
+        color: grey!important;
+    }
+    .paginate_button {
+        background: grey!important;
+    }
+    thead {
+        color: grey;
+    }
+  "))),
+  shinydisconnect::disconnectMessage2(),
+  useShinyjs(),
+  extendShinyjs(text = shinyjs_code, functions = c("closeWindow")),
   
-  ui <- fluidPage(theme = shinytheme("slate"),themeSelector(),tags$head(tags$style(HTML(# changing the table text to grey so it can match with the different theme selector types e.g. intergrate with gray and white
-    "
-                  .dataTables_length label, 
-                  .dataTables_filter label,
-                  .dataTables_info {
-                      color: grey!important;
-                      }
-
-                  .paginate_button {
-                      background: grey!important;
-                  }
-
-                  thead {
-                      color: grey;
-                      }
-
-                  "))),
-    shinydisconnect::disconnectMessage2(),
-    
-    titlePanel("Crime In New Zealand"),
-    sidebarLayout(
-      sidebarPanel(
-        br(),
-        sliderInput("datePicker", # adding a date slider 
-                    label="Observation Period:", 
-                    min=2014,
-                    max=2020,
-                    value = c(2014,2020),
-                    sep = ""
-        ),
-        uiOutput("OutputSelecttype"),
-        checkboxInput("clean_district", "Subset by District", FALSE),
-        conditionalPanel(
-          condition = "outcome.clean_district",
-          uiOutput("Outputdistrict"),
-          span(tags$a("Open Crime Map",
-                      href = "https://arcg.is/1zizrC0")) # creating my story map
-
-        ),
-        
-      ),
-      mainPanel(
-        h3(textOutput("Textsummary")),
-        downloadButton("install", "Download"),# arranging the download
-        br(),
-        plotOutput("plot"),
-        br(),
-        tmapOutput("map"),
-        hr(),
-        span("Data source:", # creating a hyperlink
-             tags$a("Open Police Data",
-                    href = "https://www.police.govt.nz/about-us/publications-statistics/data-and-statistics/policedatanz/victimisation-time-and-place")),
-        br(), br(),
-        tags$br(),
-        DT::dataTableOutput("dates"),
-        actionButton("exit", "EXIT", class = "btn-warning")# creating a put buttom
-      )
+  titlePanel("Crime In New Zealand"),
+  sidebarLayout(
+    sidebarPanel(
+      br(),
+      sliderInput("datePicker", label = "Observation Period:", min = 2014, max = 2020, value = c(2018, 2020), sep = ""),
+      uiOutput("OutputSelecttype"),
+      checkboxInput("clean_district", "Subset by District", TRUE),
+      uiOutput("Outputdistrict"),
+      span(tags$a("Open Crime Map", href = "https://arcg.is/1zizrC0"))
+    ),
+    mainPanel(
+      h3(textOutput("Textsummary")),
+      downloadButton("install", "Download"),
+      br(),
+      plotlyOutput("plotly_plot"),
+      br(),
+      tmapOutput("map"),
+      hr(),
+      span("Data source:", tags$a("Open Police Data", href = "https://www.police.govt.nz/about-us/publications-statistics/data-and-statistics/policedatanz/victimisation-time-and-place")),
+      br(), br(),
+      tags$br(),
+      DT::dataTableOutput("dates"),
+      actionButton("exit", "EXIT", class = "btn-warning")
     )
-  ),
-  
-  server <- function(input, output, session) {
-    
-   
-    output$Outputdistrict <- renderUI({
-      selectInput("DistrictInput", "Police District",# creating a selection input
-                  sort(unique(pd$Police.District)),
-                  selected = "Auckland City")# creating a selection input
-    })
-    
-    output$OutputSelecttype <- renderUI({
-      selectInput("crimeInput", "Crime Categories",# creating a selection input
-                  sort(unique(pd$ANZSOC.Subdivision)),
-                  multiple = TRUE,
-                  selected = c("Assault", "Robbery")) # creating a selection input
-    })
-     
-    output$table <- DT::renderDT({
-      pd
-    })
-    
-    output$Textsummary <- renderText({
-      numOptions <- nrow(dates())
-      if (is.null(numOptions)) {
-        numOptions <- 0
-      }
-      paste0(numOptions," Entries") # linking the Entries subset data
-    })
-    
-    dates <- reactive({
-      dates <- pd
-      
-      if (is.null(input$DistrictInput)) {
-        return(NULL)
-      }
-      
-      dates <- dplyr::filter(dates, ANZSOC.Subdivision %in% input$crimeInput) # cleaning out the date data set
-      if (input$clean_district) {
-        dates <- dplyr::filter(dates, Police.District == input$DistrictInput)
-      }
-      dates <- dplyr::filter(dates, Year >= input$datePicker[1],
-                             Year <= input$datePicker[2])
-      if(nrow(dates) == 0) {
-        return(NULL)
-      }
-      dates
-    })
-    
-    output$plot <- renderPlot({
-      
-      if (is.null(dates())) {
-        return(NULL)
-      }
-      
-      ggplot(dates(), aes(y=Victimisations, x = ANZSOC.Subdivision, fill= Age)) + # creating a boxplot
-        geom_bar(stat="identity", position=position_dodge()) + theme(plot.background = element_rect(fill = "gray"),
-                                                                     legend.key = element_rect(fill = "transparent", colour = "transparent"))
-      
-    }, bg="transparent",execOnResize = TRUE)
-    
-      output$map=renderTmap({ # creating a map from tmap and sf library
-        tm_shape(nz_police_district)+
-        tm_borders() +
-        tm_layout(main.title = "Study area", legend.outside = TRUE)+
-        tm_dots("DISTRICT_N",size = 0.1)+
-        tm_basemap("OpenStreetMap.Mapnik")+
-        tmap_mode("view")
-      
-    })
-    
-    
-    output$dates <- DT::renderDataTable({  #linking dates with the table
-      dates()
-    })
-    
-    output$install <- downloadHandler( # creating a download file name
-      f  = function() {
-        "Police_outcome.csv"
-      },
-      content = function(c1) {
-        write.csv(dates(), c1)
-      }
-    )
-    observeEvent(input$exit,  { stopApp("networkapp") ; js$closeWindow()})
-  }  
-)
-
-networkapp <- list( # creating a window
-  ui = fluidPage(
-    useShinyjs(),
-    extendShinyjs(text = shinyjs, functions = c("closeWindow")),
-    fluidRow(
-      column(1),
-      mainPanel(h2("Find Crimes Across New Zealand"), 
-                actionButton("application", "Select",class = "btn-danger"), 
-      ))
-  ),
-  server = function(input, output, session) {
-    observeEvent(input$application, {stopApp("application") ; js$closeWindow() })
-  }
-)
-
-network <- "networkapp"
-while (TRUE) 
-{
-  m <- switch(
-    network,
-    networkapp = shinyApp(networkapp$ui, networkapp$server),
-    application = shinyApp(application$ui, application$server),
   )
+)
 
-    break
-  }
-   network <- print(m)
-  message("New network ", network)
+# Define the server logic
+server <- function(input, output, session) {
+  # Output for district selection UI
+  output$Outputdistrict <- renderUI({
+    selectInput("DistrictInput", "Police District", sort(unique(pd$Police.District)), selected = "Auckland City")
+  })
+  
+  # Output for crime category selection UI
+  output$OutputSelecttype <- renderUI({
+    selectInput("crimeInput", "Crime Categories", sort(unique(pd$ANZSOC.Subdivision)), multiple = TRUE, selected = c("Assault", "Robbery"))
+  })
+  
+  # Output for data table
+  output$table <- DT::renderDT({ pd })
+  
+  # Text summary output
+  output$Textsummary <- renderText({
+    numOptions <- nrow(dates())
+    if (is.null(numOptions)) numOptions <- 0
+    paste0(numOptions, " Entries")
+  })
+  
+  # Reactive dates filtered by user input
+  dates <- reactive({
+    dates <- pd
+    if (is.null(input$DistrictInput)) return(NULL)
+    dates <- filter(dates, ANZSOC.Subdivision %in% input$crimeInput)
+    if (input$clean_district) dates <- filter(dates, Police.District == input$DistrictInput)
+    dates <- filter(dates, Year >= input$datePicker[1], Year <= input$datePicker[2])
+    if (nrow(dates) == 0) return(NULL)
+    dates
+  })
+  
+  # Plotly plot output
+  output$plotly_plot <- renderPlotly({
+    if (is.null(dates())) return(NULL)
+    p <- ggplot(dates(), aes(y = Victimisations, x = ANZSOC.Subdivision, fill = Age)) + 
+      geom_bar(stat = "identity", position = position_dodge()) + 
+      theme(plot.background = element_rect(fill = "gray"),
+            legend.key = element_rect(fill = "transparent", colour = "transparent"),
+            plot.title = element_text(margin = margin(b = 20), size = 14))
+    ggplotly(p) %>% layout(title = "Victimisations by Crime Category and Age", margin = list(t = 50))
+  })
+  
+  # Tmap output
+  output$map <- renderTmap({
+    tm_shape(nz_police_district) +
+      tm_borders() +
+      tm_layout(main.title = "Study area", legend.outside = TRUE, legend.title.size = 1.5, legend.text.size = 1.2) +
+      tm_dots(col = "Regional Council", size = 0.1, palette = region_colors, popup.vars = c("Regional Council" = "Regional Council", "Area (km²)" = "area")) +
+      tm_basemap("OpenStreetMap.Mapnik") +
+      tmap_mode("view")
+  })
+  
+  # Data table output
+  output$dates <- DT::renderDataTable({ dates() })
+  
+  # Download handler for CSV
+  output$install <- downloadHandler(
+    filename = function() { "Police_outcome.csv" },
+    content = function(file) { write.csv(dates(), file) }
+  )
+  
+  # Close window action
+  observeEvent(input$exit, { stopApp("networkapp"); js$closeWindow() })
+}
 
+# Run the Shiny app
 shinyApp(ui = ui, server = server)
-
